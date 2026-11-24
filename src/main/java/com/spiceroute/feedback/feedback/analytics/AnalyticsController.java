@@ -1,5 +1,6 @@
 package com.spiceroute.feedback.feedback.analytics;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -11,7 +12,7 @@ import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 
-/** Dates are yyyy-MM-dd and inclusive, interpreted in the restaurant timezone (default Asia/Dhaka). */
+@Tag(name = "Analytics", description = "Rating trends, summaries and branch comparisons")
 @RestController
 @RequestMapping("/api/analytics")
 @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
