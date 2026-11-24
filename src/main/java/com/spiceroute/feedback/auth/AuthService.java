@@ -1,10 +1,13 @@
 package com.spiceroute.feedback.auth;
 
 import com.spiceroute.feedback.common.ApiException;
+import com.spiceroute.feedback.common.SlidingWindowRateLimiter;
+import com.spiceroute.feedback.domain.RefreshToken;
 import com.spiceroute.feedback.domain.Restaurant;
 import com.spiceroute.feedback.domain.RestaurantStatus;
 import com.spiceroute.feedback.domain.Role;
 import com.spiceroute.feedback.domain.User;
+import com.spiceroute.feedback.repository.RefreshTokenRepository;
 import com.spiceroute.feedback.repository.RestaurantRepository;
 import com.spiceroute.feedback.repository.UserRepository;
 import com.spiceroute.feedback.security.JwtService;
@@ -15,6 +18,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.UUID;
 
 @Service
@@ -22,15 +27,21 @@ public class AuthService {
 
     private final UserRepository users;
     private final RestaurantRepository restaurants;
+    private final RefreshTokenRepository refreshTokens;
     private final PasswordEncoder encoder;
     private final JwtService jwt;
+    private final SlidingWindowRateLimiter limiter;
 
     public AuthService(UserRepository users, RestaurantRepository restaurants,
-                       PasswordEncoder encoder, JwtService jwt) {
+                       RefreshTokenRepository refreshTokens,
+                       PasswordEncoder encoder, JwtService jwt,
+                       SlidingWindowRateLimiter limiter) {
         this.users = users;
         this.restaurants = restaurants;
+        this.refreshTokens = refreshTokens;
         this.encoder = encoder;
         this.jwt = jwt;
+        this.limiter = limiter;
     }
 
     @Transactional
@@ -59,28 +70,64 @@ public class AuthService {
 
     @Transactional(readOnly = true)
     public AuthResponse login(LoginRequest req) {
-        User user = users.findByEmail(req.email().trim().toLowerCase())
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or password"));
+        String email = req.email().trim().toLowerCase();
+        String lockKey = "login:" + email;
+
+        // 10 failed attempts within 15 minutes → locked out
+        User user = users.findByEmail(email)
+                .orElseThrow(() -> {
+                    limiter.recordFailure(lockKey);
+                    return new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or password");
+                });
+
+        if (limiter.isLockedOut(lockKey)) {
+            throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many failed login attempts. Try again in 15 minutes.");
+        }
+
         if (!encoder.matches(req.password(), user.getPasswordHash())) {
+            limiter.recordFailure(lockKey);
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid email or password");
         }
+
+        limiter.reset(lockKey); // successful login clears the counter
         assertCanSignIn(user);
         return respond(user);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuthResponse refresh(RefreshRequest req) {
+        String raw = req.refreshToken();
         Claims claims;
         try {
-            claims = jwt.parse(req.refreshToken());
+            claims = jwt.parse(raw);
         } catch (JwtException | IllegalArgumentException ex) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid or expired refresh token");
         }
         if (!"refresh".equals(claims.get("typ", String.class))) {
             throw new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token");
         }
-        User user = users.findById(UUID.fromString(claims.getSubject()))
-                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Invalid refresh token"));
+
+        // B4.3 / B4.4 — look up the stored hash, reject if already used (replay attack)
+        String hash = JwtService.hash(raw);
+        RefreshToken stored = refreshTokens.findByTokenHash(hash)
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "Refresh token not recognised"));
+
+        if (stored.isUsed()) {
+            // A reused token is a security event — revoke all tokens for this user
+            refreshTokens.revokeAllForUser(stored.getUserId());
+            throw new ApiException(HttpStatus.UNAUTHORIZED,
+                    "Refresh token already used. All sessions have been invalidated for security.");
+        }
+        if (stored.getExpiresAt().isBefore(Instant.now())) {
+            throw new ApiException(HttpStatus.UNAUTHORIZED, "Refresh token expired");
+        }
+
+        // Mark consumed — single-use
+        stored.setUsed(true);
+
+        User user = users.findById(stored.getUserId())
+                .orElseThrow(() -> new ApiException(HttpStatus.UNAUTHORIZED, "User not found"));
         assertCanSignIn(user);
         return respond(user);
     }
@@ -100,9 +147,17 @@ public class AuthService {
     }
 
     private AuthResponse respond(User user) {
-        return new AuthResponse(
-                jwt.createAccessToken(user),
-                jwt.createRefreshToken(user),
+        String accessToken  = jwt.createAccessToken(user);
+        String refreshToken = jwt.createRefreshToken(user);
+
+        // B4.3 — persist the hash so the token can be validated and rotated on use
+        RefreshToken stored = new RefreshToken();
+        stored.setTokenHash(JwtService.hash(refreshToken));
+        stored.setUserId(user.getId());
+        stored.setExpiresAt(Instant.now().plus(jwt.getRefreshDays(), ChronoUnit.DAYS));
+        refreshTokens.save(stored);
+
+        return new AuthResponse(accessToken, refreshToken,
                 new AuthResponse.UserInfo(user.getId(), user.getName(), user.getEmail(),
                         user.getRole(), user.getRestaurantId()));
     }

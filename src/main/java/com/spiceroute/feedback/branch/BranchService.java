@@ -5,6 +5,7 @@ import com.spiceroute.feedback.domain.Branch;
 import com.spiceroute.feedback.domain.ManagerBranch;
 import com.spiceroute.feedback.domain.Role;
 import com.spiceroute.feedback.repository.BranchRepository;
+import com.spiceroute.feedback.repository.DiningTableRepository;
 import com.spiceroute.feedback.repository.ManagerBranchRepository;
 import com.spiceroute.feedback.security.AuthPrincipal;
 import com.spiceroute.feedback.security.CurrentUser;
@@ -20,10 +21,13 @@ public class BranchService {
 
     private final BranchRepository branches;
     private final ManagerBranchRepository managerBranches;
+    private final DiningTableRepository tables;
 
-    public BranchService(BranchRepository branches, ManagerBranchRepository managerBranches) {
+    public BranchService(BranchRepository branches, ManagerBranchRepository managerBranches,
+                         DiningTableRepository tables) {
         this.branches = branches;
         this.managerBranches = managerBranches;
+        this.tables = tables;
     }
 
     /** Owners see every branch of their restaurant; managers only their assigned branches. */
@@ -66,8 +70,12 @@ public class BranchService {
     public void delete(UUID id) {
         Branch branch = branches.findByIdAndRestaurantId(id, CurrentUser.restaurantId())
                 .orElseThrow(BranchService::notFound);
-        // Soft-delete: deactivate instead of hard-delete so that all historical
-        // feedback rows (which CASCADE-DELETE on hard delete) are preserved.
+        long activeTables = tables.countByBranchIdAndActiveTrue(branch.getId());
+        if (activeTables > 0) {
+            throw new ApiException(HttpStatus.CONFLICT,
+                    "Branch has " + activeTables + " active table(s). " +
+                    "Deactivate all tables before deactivating the branch.");
+        }
         branch.setActive(false);
     }
 
