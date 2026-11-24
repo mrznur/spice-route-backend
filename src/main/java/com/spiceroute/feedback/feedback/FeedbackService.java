@@ -9,6 +9,7 @@ import com.spiceroute.feedback.domain.RestaurantStatus;
 import com.spiceroute.feedback.repository.BranchRepository;
 import com.spiceroute.feedback.repository.DiningTableRepository;
 import com.spiceroute.feedback.repository.FeedbackRepository;
+import com.spiceroute.feedback.repository.FeedbackSpecs;
 import com.spiceroute.feedback.repository.RestaurantRepository;
 import com.spiceroute.feedback.security.CurrentUser;
 import org.springframework.beans.factory.annotation.Value;
@@ -120,7 +121,8 @@ public class FeedbackService {
                                      Instant from, Instant to, int page, int size) {
         UUID restaurantId = CurrentUser.restaurantId();
         PageRequest pr = PageRequest.of(page, Math.min(size, 100));
-        Page<Feedback> result = feedbacks.search(restaurantId, branchId, minRating, maxRating, from, to, pr);
+        var spec = FeedbackSpecs.search(restaurantId, branchId, minRating, maxRating, from, to);
+        Page<Feedback> result = feedbacks.findAll(spec, pr);
         List<FeedbackResponse> content = result.getContent().stream().map(FeedbackResponse::from).toList();
         return new FeedbackPageResponse(content, result.getTotalElements(), result.getTotalPages(), page, size);
     }
@@ -143,10 +145,8 @@ public class FeedbackService {
     }
 
     private long countByRating(UUID restaurantId, UUID branchId, short rating) {
-        Page<Feedback> p = feedbacks.search(
-                restaurantId, branchId, rating, rating, null, null,
-                PageRequest.of(0, 1));
-        return p.getTotalElements();
+        var spec = FeedbackSpecs.search(restaurantId, branchId, rating, rating, null, null);
+        return feedbacks.count(spec);
     }
 
     /** Behind a reverse proxy, set server.forward-headers-strategy=framework so this is the real client IP. */
