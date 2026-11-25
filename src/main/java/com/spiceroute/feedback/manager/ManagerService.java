@@ -7,6 +7,7 @@ import com.spiceroute.feedback.domain.Role;
 import com.spiceroute.feedback.domain.User;
 import com.spiceroute.feedback.repository.BranchRepository;
 import com.spiceroute.feedback.repository.ManagerBranchRepository;
+import com.spiceroute.feedback.repository.RefreshTokenRepository;
 import com.spiceroute.feedback.repository.UserRepository;
 import com.spiceroute.feedback.security.CurrentUser;
 import org.springframework.http.HttpStatus;
@@ -27,13 +28,17 @@ public class ManagerService {
     private final UserRepository users;
     private final BranchRepository branches;
     private final ManagerBranchRepository managerBranches;
+    private final RefreshTokenRepository refreshTokenRepo;
     private final PasswordEncoder encoder;
 
     public ManagerService(UserRepository users, BranchRepository branches,
-                          ManagerBranchRepository managerBranches, PasswordEncoder encoder) {
+                          ManagerBranchRepository managerBranches,
+                          RefreshTokenRepository refreshTokenRepo,
+                          PasswordEncoder encoder) {
         this.users = users;
         this.branches = branches;
         this.managerBranches = managerBranches;
+        this.refreshTokenRepo = refreshTokenRepo;
         this.encoder = encoder;
     }
 
@@ -117,6 +122,16 @@ public class ManagerService {
                         .stream().map(ManagerResponse.BranchInfo::from).toList();
 
         return ManagerResponse.from(manager, branchInfos);
+    }
+
+    @Transactional
+    public void resetPassword(UUID id, ResetPasswordRequest req) {
+        UUID restaurantId = CurrentUser.restaurantId();
+        User manager = users.findByIdAndRestaurantIdAndRole(id, restaurantId, Role.MANAGER)
+                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Manager not found"));
+        manager.setPasswordHash(encoder.encode(req.newPassword()));
+        // Invalidate all existing refresh tokens so old sessions can't be reused
+        refreshTokenRepo.revokeAllForUser(manager.getId());
     }
 
     @Transactional

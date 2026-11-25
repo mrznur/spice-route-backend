@@ -43,6 +43,9 @@ public class GeminiClient {
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
                 .build();
+        if ("disabled".equals(apiKey)) {
+            log.warn("GEMINI_API_KEY is not set — AI summary feature will return 503 until configured.");
+        }
     }
 
     public record GeminiResult(String text, int inputTokens, int outputTokens) {}
@@ -52,6 +55,10 @@ public class GeminiClient {
      * Throws ApiException on timeout or non-2xx response.
      */
     public GeminiResult generate(String prompt) {
+        if ("disabled".equals(apiKey)) {
+            throw new ApiException(HttpStatus.SERVICE_UNAVAILABLE,
+                    "AI features are not configured. Set the GEMINI_API_KEY environment variable.");
+        }
         String url = BASE + model + ":generateContent?key=" + apiKey;
 
         // Escape the prompt for JSON — ObjectMapper handles all edge cases

@@ -68,7 +68,7 @@ public class AuthService {
         return respond(owner);
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public AuthResponse login(LoginRequest req) {
         String email = req.email().trim().toLowerCase();
         String lockKey = "login:" + email;

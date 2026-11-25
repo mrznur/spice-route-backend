@@ -2,13 +2,12 @@ package com.spiceroute.feedback.auth;
 
 import com.spiceroute.feedback.security.AuthPrincipal;
 import com.spiceroute.feedback.security.CurrentUser;
-import org.springframework.security.access.prepost.PreAuthorize;
+import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.Map;
-
+@Tag(name = "Auth", description = "Register, login and refresh tokens")
 @RestController
 @RequestMapping("/api")
 public class MeController {
@@ -16,12 +15,5 @@ public class MeController {
     @GetMapping("/me")
     public AuthPrincipal me() {
         return CurrentUser.get();
-    }
-
-    /** Temporary endpoint to prove role checks work; replaced by the real admin API on Day 4. */
-    @GetMapping("/admin/ping")
-    @PreAuthorize("hasRole('SUPER_ADMIN')")
-    public Map<String, String> adminPing() {
-        return Map.of("message", "super admin access ok");
     }
 }

@@ -1,5 +1,6 @@
 package com.spiceroute.feedback.feedback;
 
+import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
@@ -11,6 +12,7 @@ import java.time.LocalDate;
 import java.time.ZoneOffset;
 import java.util.UUID;
 
+@Tag(name = "Feedback", description = "Customer feedback submission and dashboard listing")
 @RestController
 @RequestMapping("/api")
 public class FeedbackController {
