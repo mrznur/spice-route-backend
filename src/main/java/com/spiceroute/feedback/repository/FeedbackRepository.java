@@ -15,7 +15,7 @@ public interface FeedbackRepository
         extends JpaRepository<Feedback, UUID>, JpaSpecificationExecutor<Feedback> {
 
     @Query("""
-            SELECT AVG(CAST(f.rating AS double))
+            SELECT AVG(f.rating)
             FROM Feedback f
             WHERE f.restaurantId = :restaurantId
               AND (:branchId IS NULL OR f.branchId = :branchId)
