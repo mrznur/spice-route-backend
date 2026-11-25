@@ -15,7 +15,26 @@ spring:
   flyway:
     enabled: true
 
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health          # only /actuator/health is public — nothing else
+  endpoint:
+    health:
+      show-details: never        # don't leak internal DB status details
+
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:false}   # off in production; set SWAGGER_ENABLED=true locally
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:false}
+
 app:
+  gemini:
+    api-key: ${GEMINI_API_KEY:disabled}
+    model: ${GEMINI_MODEL:gemini-flash-lite-latest}
+    timeout-seconds: ${GEMINI_TIMEOUT:20}
   jwt:
     # must be 32+ characters; override with the JWT_SECRET env var outside local dev
     secret: ${JWT_SECRET:dev-only-secret-change-me-dev-only-secret-change-me}
