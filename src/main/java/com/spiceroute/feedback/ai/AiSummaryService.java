@@ -42,6 +42,7 @@ public class AiSummaryService {
     private final FeedbackRepository feedbacks;
     private final AiSummaryRepository summaries;
     private final AiUsageLogRepository usageLogs;
+    private final AiUsageLogService usageLogService;
     private final BranchService branchService;
     private final GeminiClient gemini;
     private final ObjectMapper mapper = new ObjectMapper();
@@ -50,12 +51,14 @@ public class AiSummaryService {
             FeedbackRepository feedbacks,
             AiSummaryRepository summaries,
             AiUsageLogRepository usageLogs,
+            AiUsageLogService usageLogService,
             BranchService branchService,
             GeminiClient gemini
     ) {
         this.feedbacks = feedbacks;
         this.summaries = summaries;
         this.usageLogs = usageLogs;
+        this.usageLogService = usageLogService;
         this.branchService = branchService;
         this.gemini = gemini;
     }
@@ -165,9 +168,19 @@ public class AiSummaryService {
             usageLog.setInputTokens(result.inputTokens());
             usageLog.setOutputTokens(result.outputTokens());
             usageLog.setStatus("COMPLETED");
-        } catch (ApiException ex) {
-            usageLog.setStatus("FAILED");
-            usageLogs.save(usageLog);
+        } catch (RuntimeException ex) {
+            // Persist the failure independently so the record survives
+            // when this summary transaction rolls back.
+            try {
+                usageLogService.recordFailure(restaurantId);
+            } catch (RuntimeException loggingEx) {
+                log.error(
+                        "Could not persist failed AI usage log for restaurant {}",
+                        restaurantId,
+                        loggingEx
+                );
+            }
+
             throw ex;
         }
 

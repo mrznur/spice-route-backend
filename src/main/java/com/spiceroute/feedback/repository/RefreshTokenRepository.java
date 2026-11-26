@@ -35,4 +35,18 @@ public interface RefreshTokenRepository
           AND t.used = false
         """)
     void revokeAllForUser(@Param("userId") UUID userId);
+
+    /**
+     * Atomically consume a refresh token only if it has not already been used.
+     *
+     * @return 1 if the token was consumed, otherwise 0.
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+        UPDATE RefreshToken t
+        SET t.used = true
+        WHERE t.id = :id
+          AND t.used = false
+        """)
+    int consumeIfUnused(@Param("id") UUID id);
 }
