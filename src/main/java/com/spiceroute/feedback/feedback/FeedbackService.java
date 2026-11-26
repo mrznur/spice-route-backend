@@ -1,3 +1,4 @@
+
 package com.spiceroute.feedback.feedback;
 
 import com.spiceroute.feedback.common.ApiException;
@@ -6,12 +7,16 @@ import com.spiceroute.feedback.domain.Branch;
 import com.spiceroute.feedback.domain.DiningTable;
 import com.spiceroute.feedback.domain.Feedback;
 import com.spiceroute.feedback.domain.RestaurantStatus;
+import com.spiceroute.feedback.domain.Role;
 import com.spiceroute.feedback.repository.BranchRepository;
 import com.spiceroute.feedback.repository.DiningTableRepository;
 import com.spiceroute.feedback.repository.FeedbackRepository;
 import com.spiceroute.feedback.repository.FeedbackSpecs;
+import com.spiceroute.feedback.repository.ManagerBranchRepository;
 import com.spiceroute.feedback.repository.RestaurantRepository;
+import com.spiceroute.feedback.security.AuthPrincipal;
 import com.spiceroute.feedback.security.CurrentUser;
+
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
@@ -26,11 +31,14 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 @Service
 public class FeedbackService {
 
-    private static final Set<String> ALLOWED_LANGUAGES = Set.of("en", "bn", "banglish");
+    private static final Set<String> ALLOWED_LANGUAGES =
+            Set.of("en", "bn", "banglish");
+
     private static final Duration TABLE_WINDOW = Duration.ofMinutes(10);
     private static final Duration IP_WINDOW = Duration.ofHours(1);
 
@@ -38,127 +46,296 @@ public class FeedbackService {
     private final DiningTableRepository tables;
     private final BranchRepository branches;
     private final RestaurantRepository restaurants;
+    private final ManagerBranchRepository managerBranches;
     private final SlidingWindowRateLimiter limiter;
     private final int perTableLimit;
     private final int perIpLimit;
 
-    public FeedbackService(FeedbackRepository feedbacks, DiningTableRepository tables,
-                           BranchRepository branches, RestaurantRepository restaurants,
-                           SlidingWindowRateLimiter limiter,
-                           @Value("${app.rate-limit.per-table:5}") int perTableLimit,
-                           @Value("${app.rate-limit.per-ip:60}") int perIpLimit) {
+    public FeedbackService(
+            FeedbackRepository feedbacks,
+            DiningTableRepository tables,
+            BranchRepository branches,
+            RestaurantRepository restaurants,
+            ManagerBranchRepository managerBranches,
+            SlidingWindowRateLimiter limiter,
+            @Value("${app.rate-limit.per-table:5}") int perTableLimit,
+            @Value("${app.rate-limit.per-ip:60}") int perIpLimit
+    ) {
         this.feedbacks = feedbacks;
         this.tables = tables;
         this.branches = branches;
         this.restaurants = restaurants;
+        this.managerBranches = managerBranches;
         this.limiter = limiter;
         this.perTableLimit = perTableLimit;
         this.perIpLimit = perIpLimit;
     }
 
-    /** Public endpoint — no auth required. QR token identifies the table. */
+    /**
+     * Public endpoint — no authentication required.
+     * QR token identifies the table.
+     */
     @Transactional
     public FeedbackResponse submit(SubmitFeedbackRequest req) {
         String token = req.qrToken().trim();
 
-        // limits run before any database lookup so abusive clients are cheap to reject
         String ip = clientIp();
+
         if (!limiter.tryAcquire("ip:" + ip, perIpLimit, IP_WINDOW)
-                || !limiter.tryAcquire("table:" + ip + ":" + token, perTableLimit, TABLE_WINDOW)) {
-            throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,
-                    "Too many submissions. Please try again in a few minutes.");
+                || !limiter.tryAcquire(
+                        "table:" + ip + ":" + token,
+                        perTableLimit,
+                        TABLE_WINDOW
+                )) {
+            throw new ApiException(
+                    HttpStatus.TOO_MANY_REQUESTS,
+                    "Too many submissions. Please try again in a few minutes."
+            );
         }
 
         DiningTable table = tables.findByQrToken(token)
-                .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "QR code not found"));
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.NOT_FOUND,
+                        "QR code not found"
+                ));
+
         if (!table.isActive()) {
-            throw new ApiException(HttpStatus.GONE, "This table is no longer active");
+            throw new ApiException(
+                    HttpStatus.GONE,
+                    "This table is no longer active"
+            );
         }
-        // an inactive branch or a suspended restaurant must not keep collecting feedback
-        Branch branch = branches.findById(table.getBranchId()).filter(Branch::isActive)
-                .orElseThrow(() -> new ApiException(HttpStatus.GONE, "This QR code is no longer active"));
+
+        Branch branch = branches.findById(table.getBranchId())
+                .filter(Branch::isActive)
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.GONE,
+                        "This QR code is no longer active"
+                ));
+
         restaurants.findById(branch.getRestaurantId())
                 .filter(r -> r.getStatus() == RestaurantStatus.ACTIVE)
-                .orElseThrow(() -> new ApiException(HttpStatus.GONE, "This QR code is no longer active"));
+                .orElseThrow(() -> new ApiException(
+                        HttpStatus.GONE,
+                        "This QR code is no longer active"
+                ));
 
         String comment = blankToNull(req.comment());
         String name = blankToNull(req.customerName());
         String phone = blankToNull(req.customerPhone());
 
-        // anonymous means anonymous: name and phone are never stored
-        boolean anonymous = Boolean.TRUE.equals(req.anonymous()) || (name == null && phone == null);
+        boolean anonymous =
+                Boolean.TRUE.equals(req.anonymous())
+                        || (name == null && phone == null);
+
         if (anonymous) {
             name = null;
             phone = null;
         }
 
-        // the comment text decides the tag; the client's hint is only used when there is no comment
         String language;
+
         if (comment != null) {
             language = LanguageDetector.detect(comment);
         } else {
-            language = (req.language() != null && ALLOWED_LANGUAGES.contains(req.language()))
-                    ? req.language() : "en";
+            language = req.language() != null
+                    && ALLOWED_LANGUAGES.contains(req.language())
+                    ? req.language()
+                    : "en";
         }
 
-        Feedback f = new Feedback();
-        f.setRestaurantId(table.getRestaurantId());
-        f.setBranchId(table.getBranchId());
-        f.setTableId(table.getId());
-        f.setRating(req.rating().shortValue());
-        f.setComment(comment);
-        f.setCustomerName(name);
-        f.setCustomerPhone(phone);
-        f.setAnonymous(anonymous);
-        f.setLanguage(language);
+        Feedback feedback = new Feedback();
+        feedback.setRestaurantId(table.getRestaurantId());
+        feedback.setBranchId(table.getBranchId());
+        feedback.setTableId(table.getId());
+        feedback.setRating(req.rating().shortValue());
+        feedback.setComment(comment);
+        feedback.setCustomerName(name);
+        feedback.setCustomerPhone(phone);
+        feedback.setAnonymous(anonymous);
+        feedback.setLanguage(language);
 
-        return FeedbackResponse.from(feedbacks.save(f));
+        return FeedbackResponse.from(feedbacks.save(feedback));
     }
 
-    /** Paginated list for the owner/manager dashboard. */
+    /**
+     * Paginated feedback list.
+     * Owners see all restaurant branches.
+     * Managers see only their assigned branches.
+     */
     @Transactional(readOnly = true)
-    public FeedbackPageResponse list(UUID branchId, Short minRating, Short maxRating,
-                                     Instant from, Instant to, int page, int size) {
+    public FeedbackPageResponse list(
+            UUID branchId,
+            Short minRating,
+            Short maxRating,
+            Instant from,
+            Instant to,
+            int page,
+            int size
+    ) {
         UUID restaurantId = CurrentUser.restaurantId();
-        PageRequest pr = PageRequest.of(page, Math.min(size, 100));
-        var spec = FeedbackSpecs.search(restaurantId, branchId, minRating, maxRating, from, to);
-        Page<Feedback> result = feedbacks.findAll(spec, pr);
-        List<FeedbackResponse> content = result.getContent().stream().map(FeedbackResponse::from).toList();
-        return new FeedbackPageResponse(content, result.getTotalElements(), result.getTotalPages(), page, size);
+        Set<UUID> allowedBranchIds = getAllowedBranchIds();
+
+        validateBranchFilter(branchId, allowedBranchIds);
+
+        int safePage = Math.max(page, 0);
+        int safeSize = Math.max(1, Math.min(size, 100));
+
+        PageRequest pageRequest = PageRequest.of(safePage, safeSize);
+
+        var spec = FeedbackSpecs.search(
+                restaurantId,
+                allowedBranchIds,
+                branchId,
+                minRating,
+                maxRating,
+                from,
+                to
+        );
+
+        Page<Feedback> result = feedbacks.findAll(spec, pageRequest);
+
+        List<FeedbackResponse> content = result.getContent()
+                .stream()
+                .map(FeedbackResponse::from)
+                .toList();
+
+        return new FeedbackPageResponse(
+                content,
+                result.getTotalElements(),
+                result.getTotalPages(),
+                safePage,
+                safeSize
+        );
     }
 
-    /** Summary stats for dashboard/performance. */
+    /**
+     * Dashboard feedback statistics.
+     * Uses exactly the same branch authorization scope as list().
+     */
     @Transactional(readOnly = true)
     public FeedbackStatsResponse stats(UUID branchId) {
         UUID restaurantId = CurrentUser.restaurantId();
+        Set<UUID> allowedBranchIds = getAllowedBranchIds();
 
-        // Count per rating using the paged query filtered per star
-        long five  = countByRating(restaurantId, branchId, (short) 5);
-        long four  = countByRating(restaurantId, branchId, (short) 4);
-        long three = countByRating(restaurantId, branchId, (short) 3);
-        long two   = countByRating(restaurantId, branchId, (short) 2);
-        long one   = countByRating(restaurantId, branchId, (short) 1);
+        validateBranchFilter(branchId, allowedBranchIds);
+
+        long five = countByRating(
+                restaurantId, allowedBranchIds, branchId, (short) 5
+        );
+        long four = countByRating(
+                restaurantId, allowedBranchIds, branchId, (short) 4
+        );
+        long three = countByRating(
+                restaurantId, allowedBranchIds, branchId, (short) 3
+        );
+        long two = countByRating(
+                restaurantId, allowedBranchIds, branchId, (short) 2
+        );
+        long one = countByRating(
+                restaurantId, allowedBranchIds, branchId, (short) 1
+        );
+
         long total = five + four + three + two + one;
-        Double avg = feedbacks.avgRating(restaurantId, branchId);
 
-        return new FeedbackStatsResponse(total, avg, five, four, three, two, one);
+        Double avg = total == 0
+                ? null
+                : (5.0 * five
+                    + 4.0 * four
+                    + 3.0 * three
+                    + 2.0 * two
+                    + one) / total;
+
+        return new FeedbackStatsResponse(
+                total, avg, five, four, three, two, one
+        );
     }
 
-    private long countByRating(UUID restaurantId, UUID branchId, short rating) {
-        var spec = FeedbackSpecs.search(restaurantId, branchId, rating, rating, null, null);
+    private long countByRating(
+            UUID restaurantId,
+            Set<UUID> allowedBranchIds,
+            UUID branchId,
+            short rating
+    ) {
+        var spec = FeedbackSpecs.search(
+                restaurantId,
+                allowedBranchIds,
+                branchId,
+                rating,
+                rating,
+                null,
+                null
+        );
+
         return feedbacks.count(spec);
     }
 
-    /** Behind a reverse proxy, set server.forward-headers-strategy=framework so this is the real client IP. */
+    /**
+     * null means owner: all branches.
+     * A manager receives the set of assigned branch IDs.
+     */
+    private Set<UUID> getAllowedBranchIds() {
+        AuthPrincipal principal = CurrentUser.get();
+
+        if (principal.role() == Role.OWNER) {
+            return null;
+        }
+
+        if (principal.role() == Role.MANAGER) {
+            return managerBranches.findByUserId(principal.userId())
+                    .stream()
+                    .map(managerBranch -> managerBranch.getBranchId())
+                    .collect(Collectors.toSet());
+        }
+
+        throw new ApiException(
+                HttpStatus.FORBIDDEN,
+                "This account cannot access feedback"
+        );
+    }
+
+    private void validateBranchFilter(
+            UUID branchId,
+            Set<UUID> allowedBranchIds
+    ) {
+        if (branchId == null) {
+            return;
+        }
+
+        boolean belongsToRestaurant = branches
+                .findById(branchId)
+                .map(branch -> branch.getRestaurantId()
+                        .equals(CurrentUser.restaurantId()))
+                .orElse(false);
+
+        if (!belongsToRestaurant
+                || (allowedBranchIds != null
+                && !allowedBranchIds.contains(branchId))) {
+            throw new ApiException(
+                    HttpStatus.NOT_FOUND,
+                    "Branch not found"
+            );
+        }
+    }
+
+    /**
+     * Behind a reverse proxy, configure
+     * server.forward-headers-strategy=framework.
+     */
     private static String clientIp() {
-        if (RequestContextHolder.getRequestAttributes() instanceof ServletRequestAttributes attrs) {
+        if (RequestContextHolder.getRequestAttributes()
+                instanceof ServletRequestAttributes attrs) {
             return attrs.getRequest().getRemoteAddr();
         }
+
         return "unknown";
     }
 
     private static String blankToNull(String value) {
-        if (value == null) return null;
+        if (value == null) {
+            return null;
+        }
+
         String trimmed = value.trim();
         return trimmed.isEmpty() ? null : trimmed;
     }

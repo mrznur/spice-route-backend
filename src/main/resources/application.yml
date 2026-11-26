@@ -2,6 +2,8 @@ server:
   port: 8080
 
 spring:
+  profiles:
+    default: local
   application:
     name: feedback
   datasource:
@@ -10,7 +12,7 @@ spring:
     password: ${DB_PASSWORD:feedback}
   jpa:
     hibernate:
-      ddl-auto: validate   # Flyway owns the schema; Hibernate only validates it
+      ddl-auto: validate
     open-in-view: false
   flyway:
     enabled: true
@@ -19,14 +21,14 @@ management:
   endpoints:
     web:
       exposure:
-        include: health          # only /actuator/health is public — nothing else
+        include: health
   endpoint:
     health:
-      show-details: never        # don't leak internal DB status details
+      show-details: never
 
 springdoc:
   api-docs:
-    enabled: ${SWAGGER_ENABLED:false}   # off in production; set SWAGGER_ENABLED=true locally
+    enabled: ${SWAGGER_ENABLED:false}
   swagger-ui:
     enabled: ${SWAGGER_ENABLED:false}
 
@@ -36,7 +38,6 @@ app:
     model: ${GEMINI_MODEL:gemini-flash-lite-latest}
     timeout-seconds: ${GEMINI_TIMEOUT:20}
   jwt:
-    # must be 32+ characters; override with the JWT_SECRET env var outside local dev
     secret: ${JWT_SECRET:dev-only-secret-change-me-dev-only-secret-change-me}
     access-minutes: 15
     refresh-days: 7

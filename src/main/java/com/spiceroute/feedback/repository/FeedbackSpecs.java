@@ -1,44 +1,138 @@
-package com.spiceroute.feedback.repository;
 
-import com.spiceroute.feedback.domain.Feedback;
-import jakarta.persistence.criteria.Predicate;
-import org.springframework.data.jpa.domain.Specification;
+package com.spiceroute.feedback.repository;
 
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Set;
 import java.util.UUID;
 
-/**
- * Dynamically builds the WHERE clause so only non-null filters become SQL predicates.
- * This avoids the PostgreSQL "could not determine data type of parameter" error that
- * occurs when untyped nulls are passed to a static JPQL `:param IS NULL` expression.
- */
+import org.springframework.data.jpa.domain.Specification;
+
+import com.spiceroute.feedback.domain.Feedback;
+
+import jakarta.persistence.criteria.Predicate;
+
 public final class FeedbackSpecs {
 
-    private FeedbackSpecs() {}
+    private FeedbackSpecs() {
+        // Utility class
+    }
 
+    /**
+     * Search feedback across all branches of a restaurant.
+     *
+     * IMPORTANT:
+     * Use only after restaurant-owner authorization
+     * has already been verified.
+     */
+    public static Specification<Feedback> searchAllBranches(
+            UUID restaurantId,
+            UUID branchId,
+            Short minRating,
+            Short maxRating,
+            Instant from,
+            Instant toExclusive
+    ) {
+        return search(
+                restaurantId,
+                null,
+                branchId,
+                minRating,
+                maxRating,
+                from,
+                toExclusive
+        );
+    }
+
+    /**
+     * Search feedback within an authorized branch scope.
+     *
+     * allowedBranchIds:
+     * null      -> All branches (owner-only usage)
+     * empty     -> No branches (manager has no access)
+     * non-empty -> Only authorized branches
+     *
+     * toExclusive is an exclusive upper date boundary.
+     */
     public static Specification<Feedback> search(
-            UUID restaurantId, UUID branchId, Short minRating, Short maxRating,
-            Instant from, Instant to) {
+            UUID restaurantId,
+            Set<UUID> allowedBranchIds,
+            UUID branchId,
+            Short minRating,
+            Short maxRating,
+            Instant from,
+            Instant toExclusive
+    ) {
+
         return (root, query, cb) -> {
+
             var predicates = new ArrayList<Predicate>();
-            predicates.add(cb.equal(root.get("restaurantId"), restaurantId));
+
+            // Restaurant-level isolation
+            predicates.add(
+                    cb.equal(root.get("restaurantId"), restaurantId)
+            );
+
+            // Branch-level authorization
+            if (allowedBranchIds != null) {
+
+                if (allowedBranchIds.isEmpty()) {
+                    predicates.add(cb.disjunction());
+                } else {
+                    predicates.add(
+                            root.get("branchId").in(allowedBranchIds)
+                    );
+                }
+            }
+
+            // Optional branch filter
             if (branchId != null) {
-                predicates.add(cb.equal(root.get("branchId"), branchId));
+                predicates.add(
+                        cb.equal(root.get("branchId"), branchId)
+                );
             }
+
+            // Rating filters
             if (minRating != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.get("rating"), minRating));
+                predicates.add(
+                        cb.greaterThanOrEqualTo(
+                                root.get("rating"),
+                                minRating
+                        )
+                );
             }
+
             if (maxRating != null) {
-                predicates.add(cb.lessThanOrEqualTo(root.get("rating"), maxRating));
+                predicates.add(
+                        cb.lessThanOrEqualTo(
+                                root.get("rating"),
+                                maxRating
+                        )
+                );
             }
+
+            // Date filters
             if (from != null) {
-                predicates.add(cb.greaterThanOrEqualTo(root.get("createdAt"), from));
+                predicates.add(
+                        cb.greaterThanOrEqualTo(
+                                root.get("createdAt"),
+                                from
+                        )
+                );
             }
-            if (to != null) {
-                predicates.add(cb.lessThanOrEqualTo(root.get("createdAt"), to));
+
+            if (toExclusive != null) {
+                predicates.add(
+                        cb.lessThan(
+                                root.get("createdAt"),
+                                toExclusive
+                        )
+                );
             }
-            return cb.and(predicates.toArray(new Predicate[0]));
+
+            return cb.and(
+                    predicates.toArray(new Predicate[0])
+            );
         };
     }
 }

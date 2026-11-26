@@ -1,0 +1,50 @@
+
+server:
+  port: 8080
+
+spring:
+  application:
+    name: feedback
+
+  datasource:
+    url: ${DB_URL}
+    username: ${DB_USER}
+    password: ${DB_PASSWORD}
+
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration-prod
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
+
+springdoc:
+  api-docs:
+    enabled: ${SWAGGER_ENABLED:false}
+  swagger-ui:
+    enabled: ${SWAGGER_ENABLED:false}
+
+app:
+  gemini:
+    api-key: ${GEMINI_API_KEY:disabled}
+    model: ${GEMINI_MODEL:gemini-flash-lite-latest}
+    timeout-seconds: ${GEMINI_TIMEOUT:20}
+
+  jwt:
+    secret: ${JWT_SECRET}
+    access-minutes: 15
+    refresh-days: 7
+
+  cors:
+    allowed-origins: ${CORS_ORIGINS}
