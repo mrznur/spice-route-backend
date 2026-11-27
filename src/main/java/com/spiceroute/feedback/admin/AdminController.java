@@ -1,5 +1,8 @@
+
 package com.spiceroute.feedback.admin;
 
+import com.spiceroute.feedback.branch.BranchRequest;
+import com.spiceroute.feedback.branch.BranchResponse;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -20,19 +23,19 @@ public class AdminController {
         this.service = service;
     }
 
-    /** B2.2 — List all registered restaurants. */
+    /** List all registered restaurants. */
     @GetMapping("/restaurants")
     public List<AdminRestaurantResponse> listRestaurants() {
         return service.listRestaurants();
     }
 
-    /** B2.3 — Platform-wide totals. */
+    /** Platform-wide totals. */
     @GetMapping("/stats")
     public AdminStatsResponse stats() {
         return service.platformStats();
     }
 
-    /** B2.4 — Suspend or reactivate a restaurant. */
+    /** Suspend or reactivate a restaurant. */
     @PatchMapping("/restaurants/{id}/status")
     public AdminRestaurantResponse updateStatus(
             @PathVariable UUID id,
@@ -40,9 +43,32 @@ public class AdminController {
         return service.updateStatus(id, req.status());
     }
 
-    /** B2.5 — List all platform users. */
+    /** List all platform users. */
     @GetMapping("/users")
     public List<AdminUserResponse> listUsers() {
         return service.listUsers();
+    }
+
+    /** List branches for a selected restaurant. */
+    @GetMapping("/restaurants/{restaurantId}/branches")
+    public List<BranchResponse> listBranches(
+            @PathVariable UUID restaurantId) {
+        return service.listBranches(restaurantId);
+    }
+
+    /** Create a branch for a selected restaurant. */
+    @PostMapping("/restaurants/{restaurantId}/branches")
+    public BranchResponse createBranch(
+            @PathVariable UUID restaurantId,
+            @Valid @RequestBody BranchRequest req) {
+        return service.createBranch(restaurantId, req);
+    }
+
+    /** Deactivate a branch. */
+    @DeleteMapping("/restaurants/{restaurantId}/branches/{branchId}")
+    public void deactivateBranch(
+            @PathVariable UUID restaurantId,
+            @PathVariable UUID branchId) {
+        service.deactivateBranch(restaurantId, branchId);
     }
 }

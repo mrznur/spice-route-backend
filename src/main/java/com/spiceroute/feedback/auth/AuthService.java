@@ -166,7 +166,20 @@ public class AuthService {
             );
         }
 
-        stored.setUsed(true);
+        // Atomic single-use check: only one concurrent request can consume
+        // this token. A competing request receives 0.
+        int consumed = refreshTokens.consumeIfUnused(stored.getId());
+
+        if (consumed == 0) {
+            // Another request already consumed it. Revoke all sessions.
+            // This independent transaction survives the exception below.
+            revocationService.revokeAllForUser(stored.getUserId());
+
+            throw new ApiException(
+                    HttpStatus.UNAUTHORIZED,
+                    "Refresh token already used. All sessions have been invalidated for security."
+            );
+        }
 
         User user = users.findById(stored.getUserId())
                 .orElseThrow(() -> new ApiException(
@@ -177,6 +190,33 @@ public class AuthService {
         assertCanSignIn(user);
 
         return respond(user);
+    }
+
+    @Transactional
+    public void logout(String rawRefreshToken) {
+        if (rawRefreshToken == null || rawRefreshToken.isBlank()) {
+            return;
+        }
+
+        try {
+            Claims claims = jwt.parse(rawRefreshToken);
+
+            if (!"refresh".equals(claims.get("typ", String.class))) {
+                return;
+            }
+
+            String hash = JwtService.hash(rawRefreshToken);
+
+            refreshTokens.findByTokenHash(hash).ifPresent(stored -> {
+                if (!stored.isUsed()
+                        && stored.getExpiresAt().isAfter(Instant.now())) {
+                    refreshTokens.consumeIfUnused(stored.getId());
+                }
+            });
+
+        } catch (JwtException | IllegalArgumentException ex) {
+            // Invalid or expired tokens cannot maintain a session.
+        }
     }
 
     /**
