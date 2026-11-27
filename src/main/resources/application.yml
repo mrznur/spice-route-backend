@@ -46,3 +46,6 @@ app:
     password: ${SUPERADMIN_PASSWORD:ChangeMe123!}
   cors:
     allowed-origins: ${CORS_ORIGINS:http://localhost:3000}
+  cookie:
+    secure: false
+    same-site: Strict

@@ -160,8 +160,10 @@ public class FeedbackService {
 
     /**
      * Paginated feedback list.
-     * Owners see all restaurant branches.
-     * Managers see only their assigned branches.
+     *
+     * SUPER_ADMIN sees all restaurants.
+     * OWNER sees all branches in their restaurant.
+     * MANAGER sees only assigned branches.
      */
     @Transactional(readOnly = true)
     public FeedbackPageResponse list(
@@ -173,25 +175,35 @@ public class FeedbackService {
             int page,
             int size
     ) {
-        UUID restaurantId = CurrentUser.restaurantId();
-        Set<UUID> allowedBranchIds = getAllowedBranchIds();
+        AuthPrincipal principal = CurrentUser.get();
+        Role role = principal.role();
 
-        validateBranchFilter(branchId, allowedBranchIds);
+        UUID restaurantId = role == Role.SUPER_ADMIN
+                ? null
+                : CurrentUser.restaurantId();
+
+        Set<UUID> allowedBranchIds = getAllowedBranchIds(principal);
+
+        validateBranchFilter(branchId, allowedBranchIds, role, restaurantId);
 
         int safePage = Math.max(page, 0);
         int safeSize = Math.max(1, Math.min(size, 100));
 
         PageRequest pageRequest = PageRequest.of(safePage, safeSize);
 
-        var spec = FeedbackSpecs.search(
-                restaurantId,
-                allowedBranchIds,
-                branchId,
-                minRating,
-                maxRating,
-                from,
-                to
-        );
+        var spec = role == Role.SUPER_ADMIN
+                ? FeedbackSpecs.searchPlatformWide(
+                        branchId, minRating, maxRating, from, to
+                )
+                : FeedbackSpecs.search(
+                        restaurantId,
+                        allowedBranchIds,
+                        branchId,
+                        minRating,
+                        maxRating,
+                        from,
+                        to
+                );
 
         Page<Feedback> result = feedbacks.findAll(spec, pageRequest);
 
@@ -211,29 +223,35 @@ public class FeedbackService {
 
     /**
      * Dashboard feedback statistics.
-     * Uses exactly the same branch authorization scope as list().
+     * Uses the same authorization scope as list().
      */
     @Transactional(readOnly = true)
     public FeedbackStatsResponse stats(UUID branchId) {
-        UUID restaurantId = CurrentUser.restaurantId();
-        Set<UUID> allowedBranchIds = getAllowedBranchIds();
+        AuthPrincipal principal = CurrentUser.get();
+        Role role = principal.role();
 
-        validateBranchFilter(branchId, allowedBranchIds);
+        UUID restaurantId = role == Role.SUPER_ADMIN
+                ? null
+                : CurrentUser.restaurantId();
+
+        Set<UUID> allowedBranchIds = getAllowedBranchIds(principal);
+
+        validateBranchFilter(branchId, allowedBranchIds, role, restaurantId);
 
         long five = countByRating(
-                restaurantId, allowedBranchIds, branchId, (short) 5
+                restaurantId, allowedBranchIds, branchId, role, (short) 5
         );
         long four = countByRating(
-                restaurantId, allowedBranchIds, branchId, (short) 4
+                restaurantId, allowedBranchIds, branchId, role, (short) 4
         );
         long three = countByRating(
-                restaurantId, allowedBranchIds, branchId, (short) 3
+                restaurantId, allowedBranchIds, branchId, role, (short) 3
         );
         long two = countByRating(
-                restaurantId, allowedBranchIds, branchId, (short) 2
+                restaurantId, allowedBranchIds, branchId, role, (short) 2
         );
         long one = countByRating(
-                restaurantId, allowedBranchIds, branchId, (short) 1
+                restaurantId, allowedBranchIds, branchId, role, (short) 1
         );
 
         long total = five + four + three + two + one;
@@ -255,29 +273,34 @@ public class FeedbackService {
             UUID restaurantId,
             Set<UUID> allowedBranchIds,
             UUID branchId,
+            Role role,
             short rating
     ) {
-        var spec = FeedbackSpecs.search(
-                restaurantId,
-                allowedBranchIds,
-                branchId,
-                rating,
-                rating,
-                null,
-                null
-        );
+        var spec = role == Role.SUPER_ADMIN
+                ? FeedbackSpecs.searchPlatformWide(
+                        branchId, rating, rating, null, null
+                )
+                : FeedbackSpecs.search(
+                        restaurantId,
+                        allowedBranchIds,
+                        branchId,
+                        rating,
+                        rating,
+                        null,
+                        null
+                );
 
         return feedbacks.count(spec);
     }
 
     /**
-     * null means owner: all branches.
-     * A manager receives the set of assigned branch IDs.
+     * OWNER: null means all branches in their restaurant.
+     * MANAGER: assigned branch IDs only.
+     * SUPER_ADMIN: null means platform-wide; handled separately.
      */
-    private Set<UUID> getAllowedBranchIds() {
-        AuthPrincipal principal = CurrentUser.get();
-
-        if (principal.role() == Role.OWNER) {
+    private Set<UUID> getAllowedBranchIds(AuthPrincipal principal) {
+        if (principal.role() == Role.SUPER_ADMIN
+                || principal.role() == Role.OWNER) {
             return null;
         }
 
@@ -296,21 +319,27 @@ public class FeedbackService {
 
     private void validateBranchFilter(
             UUID branchId,
-            Set<UUID> allowedBranchIds
+            Set<UUID> allowedBranchIds,
+            Role role,
+            UUID restaurantId
     ) {
         if (branchId == null) {
             return;
         }
 
-        boolean belongsToRestaurant = branches
-                .findById(branchId)
-                .map(branch -> branch.getRestaurantId()
-                        .equals(CurrentUser.restaurantId()))
+        boolean branchAccessible = branches.findById(branchId)
+                .map(branch -> {
+                    if (role != Role.SUPER_ADMIN
+                            && !branch.getRestaurantId().equals(restaurantId)) {
+                        return false;
+                    }
+
+                    return allowedBranchIds == null
+                            || allowedBranchIds.contains(branchId);
+                })
                 .orElse(false);
 
-        if (!belongsToRestaurant
-                || (allowedBranchIds != null
-                && !allowedBranchIds.contains(branchId))) {
+        if (!branchAccessible) {
             throw new ApiException(
                     HttpStatus.NOT_FOUND,
                     "Branch not found"

@@ -32,7 +32,7 @@ public class FeedbackController {
 
     /** Authenticated — paginated feedback list for the dashboard. */
     @GetMapping("/feedback")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','OWNER','MANAGER')")
     public FeedbackPageResponse list(
             @RequestParam(required = false) UUID branchId,
             @RequestParam(required = false) Short minRating,
