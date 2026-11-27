@@ -1,3 +1,4 @@
+
 package com.spiceroute.feedback.feedback.analytics;
 
 import com.spiceroute.feedback.branch.BranchService;
@@ -84,7 +85,8 @@ public class AnalyticsService {
     private AnalyticsFilter filter(UUID branchId, UUID tableId, Integer minRating, Integer maxRating,
                                    LocalDate from, LocalDate to) {
         AuthPrincipal me = CurrentUser.get();
-        UUID restaurantId = CurrentUser.restaurantId();
+        boolean platformWide = me.role() == Role.SUPER_ADMIN;
+        UUID restaurantId = platformWide ? null : CurrentUser.restaurantId();
 
         if (minRating != null && (minRating < 1 || minRating > 5)) throw bad("minRating must be between 1 and 5");
         if (maxRating != null && (maxRating < 1 || maxRating > 5)) throw bad("maxRating must be between 1 and 5");
@@ -96,27 +98,32 @@ public class AnalyticsService {
             if (ChronoUnit.DAYS.between(from, to) > MAX_RANGE_DAYS) throw bad("Date range is too large (max 2 years)");
         }
 
-        // managers are limited to their assigned branches, enforced in every query
+        // Managers are limited to their assigned branches, enforced in every query.
         Set<UUID> scope = null;
         if (me.role() == Role.MANAGER) {
             scope = managerBranches.findByUserId(me.userId()).stream()
                     .map(ManagerBranch::getBranchId).collect(Collectors.toSet());
         }
 
-        // an unknown, foreign or unassigned branch/table is a 404, never an empty 200
+        // An unknown, foreign or unassigned branch/table is a 404, never an empty 200.
         if (branchId != null) {
             branchService.requireAccessible(branchId);
         }
+
         if (tableId != null) {
-            DiningTable table = tables.findByIdAndRestaurantId(tableId, restaurantId)
+            DiningTable table = (platformWide
+                    ? tables.findById(tableId)
+                    : tables.findByIdAndRestaurantId(tableId, restaurantId))
                     .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Table not found"));
+
             branchService.requireAccessible(table.getBranchId());
         }
 
         Instant fromInstant = from == null ? null : from.atStartOfDay(zone).toInstant();
         Instant toExclusive = to == null ? null : to.plusDays(1).atStartOfDay(zone).toInstant();
-        return new AnalyticsFilter(restaurantId, scope, branchId, tableId, minRating, maxRating,
-                fromInstant, toExclusive);
+
+        return new AnalyticsFilter(restaurantId, platformWide, scope, branchId, tableId,
+                minRating, maxRating, fromInstant, toExclusive);
     }
 
     private static ApiException bad(String message) {
