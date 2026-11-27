@@ -1,3 +1,4 @@
+
 package com.spiceroute.feedback.table;
 
 import io.swagger.v3.oas.annotations.tags.Tag;
@@ -21,37 +22,39 @@ public class TableController {
     }
 
     @GetMapping("/branches/{branchId}/tables")
-    @PreAuthorize("hasAnyRole('OWNER','MANAGER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','OWNER','MANAGER')")
     public List<TableResponse> list(@PathVariable UUID branchId) {
         return service.list(branchId);
     }
 
     @PostMapping("/branches/{branchId}/tables")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','OWNER')")
     @ResponseStatus(HttpStatus.CREATED)
-    public TableResponse create(@PathVariable UUID branchId, @Valid @RequestBody TableRequest req) {
+    public TableResponse create(
+            @PathVariable UUID branchId,
+            @Valid @RequestBody TableRequest req) {
         return service.create(branchId, req);
     }
 
-    /**
-     * Bulk-creates tables and returns both what was created and what was skipped (already existed).
-     * HTTP 201 even when some labels are skipped — at least one table was requested.
-     */
     @PostMapping("/branches/{branchId}/tables/bulk")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','OWNER')")
     @ResponseStatus(HttpStatus.CREATED)
-    public BulkTablesResponse createBulk(@PathVariable UUID branchId, @Valid @RequestBody BulkTablesRequest req) {
+    public BulkTablesResponse createBulk(
+            @PathVariable UUID branchId,
+            @Valid @RequestBody BulkTablesRequest req) {
         return service.createBulk(branchId, req);
     }
 
     @PutMapping("/tables/{id}")
-    @PreAuthorize("hasRole('OWNER')")
-    public TableResponse update(@PathVariable UUID id, @Valid @RequestBody TableRequest req) {
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','OWNER')")
+    public TableResponse update(
+            @PathVariable UUID id,
+            @Valid @RequestBody TableRequest req) {
         return service.update(id, req);
     }
 
     @DeleteMapping("/tables/{id}")
-    @PreAuthorize("hasRole('OWNER')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','OWNER')")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void delete(@PathVariable UUID id) {
         service.delete(id);
