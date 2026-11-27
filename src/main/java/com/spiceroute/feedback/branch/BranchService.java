@@ -1,3 +1,4 @@
+
 package com.spiceroute.feedback.branch;
 
 import com.spiceroute.feedback.common.ApiException;
@@ -23,27 +24,43 @@ public class BranchService {
     private final ManagerBranchRepository managerBranches;
     private final DiningTableRepository tables;
 
-    public BranchService(BranchRepository branches, ManagerBranchRepository managerBranches,
-                         DiningTableRepository tables) {
+    public BranchService(
+            BranchRepository branches,
+            ManagerBranchRepository managerBranches,
+            DiningTableRepository tables
+    ) {
         this.branches = branches;
         this.managerBranches = managerBranches;
         this.tables = tables;
     }
 
-    /** Owners see every branch of their restaurant; managers only their assigned branches. */
     @Transactional(readOnly = true)
     public List<BranchResponse> list() {
         AuthPrincipal me = CurrentUser.get();
+
+        if (me.role() == Role.SUPER_ADMIN) {
+            return branches.findAllByOrderByNameAsc()
+                    .stream()
+                    .map(BranchResponse::from)
+                    .toList();
+        }
+
         UUID restaurantId = CurrentUser.restaurantId();
         List<Branch> result;
+
         if (me.role() == Role.MANAGER) {
-            List<UUID> ids = managerBranches.findByUserId(me.userId()).stream()
-                    .map(ManagerBranch::getBranchId).toList();
+            List<UUID> ids = managerBranches.findByUserId(me.userId())
+                    .stream()
+                    .map(ManagerBranch::getBranchId)
+                    .toList();
+
             result = ids.isEmpty() ? List.of()
-                    : branches.findByRestaurantIdAndIdInOrderByNameAsc(restaurantId, ids);
+                    : branches.findByRestaurantIdAndIdInOrderByNameAsc(
+                            restaurantId, ids);
         } else {
             result = branches.findByRestaurantIdOrderByNameAsc(restaurantId);
         }
+
         return result.stream().map(BranchResponse::from).toList();
     }
 
@@ -53,45 +70,69 @@ public class BranchService {
         branch.setRestaurantId(CurrentUser.restaurantId());
         branch.setName(req.name().trim());
         branch.setAddress(req.address() == null ? null : req.address().trim());
+
         return BranchResponse.from(branches.save(branch));
     }
 
     @Transactional
     public BranchResponse update(UUID id, BranchRequest req) {
-        Branch branch = branches.findByIdAndRestaurantId(id, CurrentUser.restaurantId())
+        Branch branch = branches.findByIdAndRestaurantId(
+                        id, CurrentUser.restaurantId())
                 .orElseThrow(BranchService::notFound);
+
         branch.setName(req.name().trim());
         branch.setAddress(req.address() == null ? null : req.address().trim());
-        if (req.active() != null) branch.setActive(req.active());
+
+        if (req.active() != null) {
+            branch.setActive(req.active());
+        }
+
         return BranchResponse.from(branch);
     }
 
     @Transactional
     public void delete(UUID id) {
-        Branch branch = branches.findByIdAndRestaurantId(id, CurrentUser.restaurantId())
+        Branch branch = branches.findByIdAndRestaurantId(
+                        id, CurrentUser.restaurantId())
                 .orElseThrow(BranchService::notFound);
+
         long activeTables = tables.countByBranchIdAndActiveTrue(branch.getId());
+
         if (activeTables > 0) {
-            throw new ApiException(HttpStatus.CONFLICT,
-                    "Branch has " + activeTables + " active table(s). " +
-                    "Deactivate all tables before deactivating the branch.");
+            throw new ApiException(
+                    HttpStatus.CONFLICT,
+                    "Branch has " + activeTables
+                            + " active table(s). Deactivate all tables before deactivating the branch."
+            );
         }
+
         branch.setActive(false);
     }
 
     /**
-     * The single gate for branch-scoped data: the branch must belong to the caller's restaurant,
-     * and a manager must also be assigned to it. Anything else is reported as 404 so other
-     * restaurants' ids are never confirmed to exist. Reuse this in every branch-scoped feature.
+     * SUPER_ADMIN can access any existing branch.
+     * OWNER is restricted to their restaurant.
+     * MANAGER is restricted to their assigned branches.
      */
     @Transactional(readOnly = true)
     public Branch requireAccessible(UUID branchId) {
         AuthPrincipal me = CurrentUser.get();
-        Branch branch = branches.findByIdAndRestaurantId(branchId, CurrentUser.restaurantId())
+
+        if (me.role() == Role.SUPER_ADMIN) {
+            return branches.findById(branchId)
+                    .orElseThrow(BranchService::notFound);
+        }
+
+        Branch branch = branches.findByIdAndRestaurantId(
+                        branchId, CurrentUser.restaurantId())
                 .orElseThrow(BranchService::notFound);
-        if (me.role() == Role.MANAGER && !managerBranches.existsByUserIdAndBranchId(me.userId(), branchId)) {
+
+        if (me.role() == Role.MANAGER
+                && !managerBranches.existsByUserIdAndBranchId(
+                        me.userId(), branchId)) {
             throw notFound();
         }
+
         return branch;
     }
 

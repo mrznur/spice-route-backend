@@ -12,5 +12,6 @@ public interface BranchRepository extends JpaRepository<Branch, UUID> {
     List<Branch> findByRestaurantIdOrderByNameAsc(UUID restaurantId);
     List<Branch> findByRestaurantIdAndIdInOrderByNameAsc(UUID restaurantId, Collection<UUID> ids);
     Optional<Branch> findByIdAndRestaurantId(UUID id, UUID restaurantId);
+    List<Branch> findAllByOrderByNameAsc();
     long countByRestaurantIdAndIdIn(UUID restaurantId, Collection<UUID> ids);
 }
